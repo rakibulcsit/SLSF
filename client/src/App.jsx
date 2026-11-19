@@ -4,6 +4,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ProviderDashboard from "./pages/ProviderDashboard";
 import CustomerDashboard from "./pages/CustomerDashboard";
+import AdminDashboard from "./pages/AdminDashboard";
 
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
@@ -32,6 +33,10 @@ function App() {
 
   if (currentPath === "/provider-dashboard") {
     return <ProviderDashboard onNavigate={navigate} />;
+  }
+
+  if (currentPath === "/admin" || currentPath === "/admin-dashboard") {
+    return <AdminDashboard onNavigate={navigate} />;
   }
 
   if (currentPath === "/customer-dashboard" || currentPath === "/dashboard") {

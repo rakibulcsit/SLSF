@@ -49,19 +49,91 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+const authenticateAdmin = (req, res, next) => {
+  authenticateToken(req, res, () => {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Administrator privileges required.' });
+    }
+    next();
+  });
+};
+
 
 // Database connection
 const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/smart_local_service_finder';
 
+const seedDefaultAdmin = async () => {
+  try {
+    const adminEmail = 'admin@slsf.com';
+    const existingAdmin = await User.findOne({ email: adminEmail });
+    if (!existingAdmin) {
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      const admin = new User({
+        fullName: 'System Administrator',
+        email: adminEmail,
+        phone: '01700000000',
+        password: hashedPassword,
+        role: 'admin',
+      });
+      await admin.save();
+      console.log('👑 Default Admin created: admin@slsf.com / admin123');
+    }
+  } catch (err) {
+    console.error('Error seeding default admin:', err.message);
+  }
+};
+
 mongoose
   .connect(MONGO_URI)
-  .then(() => console.log(`✅ MongoDB connected successfully to ${MONGO_URI.includes('mongodb+srv') ? 'MongoDB Atlas Cloud' : 'Local MongoDB'}`))
+  .then(() => {
+    console.log(`✅ MongoDB connected successfully to ${MONGO_URI.includes('mongodb+srv') ? 'MongoDB Atlas Cloud' : 'Local MongoDB'}`);
+    seedDefaultAdmin();
+  })
   .catch((err) => {
     console.error('❌ MongoDB connection error:', err.message);
     if (err.message.includes('IP that isn\'t whitelisted') || err.name === 'MongooseServerSelectionError') {
       console.error('👉 Please make sure your IP is whitelisted on MongoDB Atlas (Network Access -> Add IP Address -> 0.0.0.0/0)');
     }
   });
+
+const attachReviewSummaries = async (profiles) => {
+  if (profiles.length === 0) return [];
+
+  const providerIds = profiles.map((profile) => profile.user?._id || profile.user);
+  const bookings = await Booking.find({
+    provider: { $in: providerIds },
+    'review.rating': { $exists: true },
+  })
+    .sort({ 'review.createdAt': -1 })
+    .select('provider customerName serviceTitle review')
+    .lean();
+
+  const summaries = new Map();
+  for (const booking of bookings) {
+    const providerId = String(booking.provider);
+    const summary = summaries.get(providerId) || { total: 0, count: 0, reviews: [] };
+    summary.total += booking.review.rating;
+    summary.count += 1;
+    if (summary.reviews.length < 3) {
+      summary.reviews.push({
+        customerName: booking.customerName,
+        serviceTitle: booking.serviceTitle,
+        ...booking.review,
+      });
+    }
+    summaries.set(providerId, summary);
+  }
+
+  return profiles.map((profile) => {
+    const summary = summaries.get(String(profile.user?._id || profile.user));
+    return {
+      ...profile.toObject(),
+      rating: summary ? Math.round((summary.total / summary.count) * 10) / 10 : 0,
+      reviewCount: summary?.count || 0,
+      reviews: summary?.reviews || [],
+    };
+  });
+};
 
 // Routes
 // 1. User Register Route
@@ -186,6 +258,10 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials. Incorrect password.' });
     }
 
+    if (user.isBlocked) {
+      return res.status(403).json({ message: 'Your account has been suspended by the administrator.' });
+    }
+
     // Generate JWT token
     const token = jwt.sign(
       { id: user._id, role: user.role, email: user.email },
@@ -244,7 +320,8 @@ app.get('/api/provider/profile', authenticateToken, async (req, res) => {
       await profile.save();
     }
 
-    res.status(200).json({ user, profile });
+    const [profileWithReviews] = await attachReviewSummaries([profile]);
+    res.status(200).json({ user, profile: profileWithReviews });
   } catch (error) {
     console.error('Error fetching provider profile:', error);
     res.status(500).json({ message: 'Server error fetching provider profile', error: error.message });
@@ -278,7 +355,8 @@ app.put('/api/provider/profile', authenticateToken, async (req, res) => {
     await profile.save();
 
     const updatedUser = await User.findById(req.user.id);
-    res.status(200).json({ message: 'Profile updated successfully', user: updatedUser, profile });
+    const [profileWithReviews] = await attachReviewSummaries([profile]);
+    res.status(200).json({ message: 'Profile updated successfully', user: updatedUser, profile: profileWithReviews });
   } catch (error) {
     console.error('Error updating provider profile:', error);
     res.status(500).json({ message: 'Server error updating provider profile', error: error.message });
@@ -524,9 +602,69 @@ app.post('/api/customer/bookings', authenticateToken, async (req, res) => {
 });
 
 // 13. Cancel Customer Booking
+app.post('/api/customer/bookings/:id/review', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customers can review a booking' });
+    }
+
+    const { rating, comment = '' } = req.body;
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ message: 'Rating must be a whole number from 1 to 5' });
+    }
+    if (typeof comment !== 'string' || comment.trim().length > 500) {
+      return res.status(400).json({ message: 'Review must be 500 characters or fewer' });
+    }
+
+    const booking = await Booking.findOne({
+      _id: req.params.id,
+      customer: req.user.id,
+    });
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+    if (booking.status !== 'completed') {
+      return res.status(400).json({ message: 'Only completed bookings can be reviewed' });
+    }
+    if (!booking.provider) {
+      return res.status(400).json({ message: 'This booking is not linked to a service provider' });
+    }
+    if (booking.review?.rating !== undefined) {
+      return res.status(409).json({ message: 'This booking has already been reviewed' });
+    }
+
+    const reviewedBooking = await Booking.findOneAndUpdate(
+      {
+        _id: booking._id,
+        customer: req.user.id,
+        status: 'completed',
+        'review.rating': { $exists: false },
+      },
+      {
+        $set: {
+          review: {
+            rating,
+            comment: comment.trim(),
+            createdAt: new Date(),
+          },
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    if (!reviewedBooking) {
+      return res.status(409).json({ message: 'This booking has already been reviewed' });
+    }
+
+    res.status(201).json({ message: 'Review submitted successfully', booking: reviewedBooking });
+  } catch (error) {
+    console.error('Error submitting booking review:', error);
+    res.status(500).json({ message: 'Server error submitting review', error: error.message });
+  }
+});
+
 app.put('/api/customer/bookings/:id/cancel', authenticateToken, async (req, res) => {
   try {
-    const booking = await Booking.findById(req.params.id);
+    const booking = await Booking.findOne({ _id: req.params.id, customer: req.user.id });
     if (!booking) {
       return res.status(404).json({ message: 'Booking request not found' });
     }
@@ -543,9 +681,151 @@ app.put('/api/customer/bookings/:id/cancel', authenticateToken, async (req, res)
 app.get('/api/providers/list', async (req, res) => {
   try {
     const profiles = await ProviderProfile.find().populate('user', 'fullName email phone');
-    res.status(200).json({ providers: profiles });
+    res.status(200).json({ providers: await attachReviewSummaries(profiles) });
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching provider profiles', error: error.message });
+  }
+});
+
+// ----------------------------------------------------
+// ADMINISTRATOR DASHBOARD & MANAGEMENT API ROUTES
+// ----------------------------------------------------
+
+// 15. Admin System Overview Stats
+app.get('/api/admin/stats', authenticateAdmin, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalCustomers = await User.countDocuments({ role: 'customer' });
+    const totalProviders = await User.countDocuments({ role: 'provider' });
+    const totalBookings = await Booking.countDocuments();
+    const pendingBookings = await Booking.countDocuments({ status: 'pending' });
+    const completedBookings = await Booking.countDocuments({ status: 'completed' });
+    const pendingVerifications = await ProviderProfile.countDocuments({ verificationStatus: 'pending' });
+
+    const completedList = await Booking.find({ status: 'completed' }).select('price');
+    const totalRevenue = completedList.reduce((sum, b) => sum + (b.price || 0), 0);
+
+    res.status(200).json({
+      totalUsers,
+      totalCustomers,
+      totalProviders,
+      totalBookings,
+      pendingBookings,
+      completedBookings,
+      pendingVerifications,
+      totalRevenue,
+    });
+  } catch (error) {
+    console.error('Admin stats error:', error);
+    res.status(500).json({ message: 'Server error fetching admin stats', error: error.message });
+  }
+});
+
+// 16. Get All Users List
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+  try {
+    const users = await User.find().sort({ createdAt: -1 });
+    res.status(200).json({ users });
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ message: 'Server error fetching users', error: error.message });
+  }
+});
+
+// 17. Block / Unblock User Account
+app.put('/api/admin/users/:id/toggle-block', authenticateAdmin, async (req, res) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ message: 'You cannot block your own admin account.' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.isBlocked = !user.isBlocked;
+    await user.save();
+
+    res.status(200).json({
+      message: `User ${user.fullName} has been ${user.isBlocked ? 'blocked' : 'unblocked'}.`,
+      user,
+    });
+  } catch (error) {
+    console.error('Error toggling user block status:', error);
+    res.status(500).json({ message: 'Server error updating user status', error: error.message });
+  }
+});
+
+// 18. Delete User
+app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ message: 'You cannot delete your own admin account.' });
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+    await ProviderProfile.findOneAndDelete({ user: req.params.id });
+    res.status(200).json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ message: 'Server error deleting user', error: error.message });
+  }
+});
+
+// 19. Get All Providers with Profiles
+app.get('/api/admin/providers', authenticateAdmin, async (req, res) => {
+  try {
+    const profiles = await ProviderProfile.find().populate('user', 'fullName email phone isBlocked');
+    const profilesWithReviews = await attachReviewSummaries(profiles);
+    res.status(200).json({ providers: profilesWithReviews });
+  } catch (error) {
+    console.error('Error fetching providers:', error);
+    res.status(500).json({ message: 'Server error fetching providers', error: error.message });
+  }
+});
+
+// 20. Verify / Reject Provider
+app.put('/api/admin/providers/:id/verify', authenticateAdmin, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['pending', 'verified', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Status must be pending, verified, or rejected' });
+    }
+
+    const profile = await ProviderProfile.findByIdAndUpdate(
+      req.params.id,
+      { verificationStatus: status },
+      { new: true }
+    ).populate('user', 'fullName email phone isBlocked');
+
+    if (!profile) {
+      return res.status(404).json({ message: 'Provider profile not found' });
+    }
+
+    const [profileWithReviews] = await attachReviewSummaries([profile]);
+    res.status(200).json({
+      message: `Provider status set to ${status.toUpperCase()}`,
+      provider: profileWithReviews,
+    });
+  } catch (error) {
+    console.error('Error verifying provider:', error);
+    res.status(500).json({ message: 'Server error verifying provider', error: error.message });
+  }
+});
+
+// 21. Get All Platform Bookings
+app.get('/api/admin/bookings', authenticateAdmin, async (req, res) => {
+  try {
+    const bookings = await Booking.find()
+      .populate('provider', 'fullName email phone')
+      .populate('customer', 'fullName email phone')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ bookings });
+  } catch (error) {
+    console.error('Error fetching all bookings:', error);
+    res.status(500).json({ message: 'Server error fetching bookings', error: error.message });
   }
 });
 

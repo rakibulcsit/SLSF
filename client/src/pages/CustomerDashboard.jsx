@@ -11,6 +11,10 @@ function CustomerDashboard({ onNavigate }) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [submittingBooking, setSubmittingBooking] = useState(false);
   const [showBookingModal, setShowBookingModal] = useState(false);
+  const [reviewBooking, setReviewBooking] = useState(null);
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewComment, setReviewComment] = useState("");
+  const [submittingReview, setSubmittingReview] = useState(false);
   const [alertMsg, setAlertMsg] = useState({ type: "", text: "" });
 
   const [user, setUser] = useState(null);
@@ -154,6 +158,47 @@ function CustomerDashboard({ onNavigate }) {
       setTimeout(() => setAlertMsg({ type: "", text: "" }), 3000);
     } catch (err) {
       setAlertMsg({ type: "error", text: err.message || "Error cancelling booking" });
+    }
+  };
+
+  const handleSubmitReview = async (e) => {
+    e.preventDefault();
+    if (!reviewBooking || !reviewRating) {
+      setAlertMsg({ type: "error", text: "Please choose a star rating before submitting." });
+      return;
+    }
+
+    setSubmittingReview(true);
+    setAlertMsg({ type: "", text: "" });
+    try {
+      const response = await fetch(
+        `http://localhost:5000/api/customer/bookings/${reviewBooking._id}/review`,
+        {
+          method: "POST",
+          headers: getAuthHeader(),
+          body: JSON.stringify({ rating: reviewRating, comment: reviewComment }),
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to submit review");
+      }
+
+      setBookings((prev) =>
+        prev.map((booking) =>
+          booking._id === reviewBooking._id ? { ...booking, review: data.booking.review } : booking
+        )
+      );
+      setReviewBooking(null);
+      setReviewRating(0);
+      setReviewComment("");
+      await fetchProvidersList();
+      setAlertMsg({ type: "success", text: "Thank you! Your review has been submitted." });
+      setTimeout(() => setAlertMsg({ type: "", text: "" }), 4000);
+    } catch (err) {
+      setAlertMsg({ type: "error", text: err.message || "Error submitting review" });
+    } finally {
+      setSubmittingReview(false);
     }
   };
 
@@ -463,7 +508,9 @@ function CustomerDashboard({ onNavigate }) {
                         <div className="cd-provider-meta">
                           <div>📍 Location: {provider.location || "Dhaka"}</div>
                           <div>💰 Hourly Rate: ৳{provider.hourlyRate || 500}/hr</div>
-                          <div>⭐ Rating: {provider.rating || 4.8} / 5.0</div>
+                          <div>
+                            ⭐ Rating: {provider.reviewCount ? `${provider.rating} / 5.0 (${provider.reviewCount} reviews)` : "No reviews yet"}
+                          </div>
                           <div>💼 Experience: {provider.experienceYears || 2} Years</div>
                         </div>
 
@@ -522,6 +569,12 @@ function CustomerDashboard({ onNavigate }) {
                               Notes: "{booking.notes}"
                             </p>
                           )}
+                          {booking.review?.rating && (
+                            <div className="cd-review-summary">
+                              <strong>Your review: {"★".repeat(booking.review.rating)}</strong>
+                              {booking.review.comment && <span>{booking.review.comment}</span>}
+                            </div>
+                          )}
                         </div>
 
                         <div className="cd-booking-actions">
@@ -534,6 +587,18 @@ function CustomerDashboard({ onNavigate }) {
                               onClick={() => handleCancelBooking(booking._id)}
                             >
                               Cancel Booking
+                            </button>
+                          )}
+                          {booking.status === "completed" && booking.provider && !booking.review?.rating && (
+                            <button
+                              className="cd-btn-review"
+                              onClick={() => {
+                                setReviewBooking(booking);
+                                setReviewRating(0);
+                                setReviewComment("");
+                              }}
+                            >
+                              Rate service
                             </button>
                           )}
                         </div>
@@ -668,6 +733,63 @@ function CustomerDashboard({ onNavigate }) {
               <div className="cd-form-group full-width">
                 <button type="submit" className="cd-btn-submit-booking" disabled={submittingBooking}>
                   {submittingBooking ? "Submitting Request..." : "🚀 Confirm & Request Booking"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {reviewBooking && (
+        <div className="cd-modal-overlay">
+          <div className="cd-modal">
+            <div className="cd-modal-header">
+              <h3>Review {reviewBooking.serviceTitle}</h3>
+              <button
+                className="cd-btn-close"
+                onClick={() => setReviewBooking(null)}
+                aria-label="Close review form"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleSubmitReview} className="cd-form-grid">
+              <div className="cd-form-group full-width">
+                <label>Your rating</label>
+                <div className="cd-rating-picker" role="group" aria-label="Choose a rating from 1 to 5 stars">
+                  {[1, 2, 3, 4, 5].map((rating) => (
+                    <button
+                      key={rating}
+                      type="button"
+                      className={rating <= reviewRating ? "selected" : ""}
+                      onClick={() => setReviewRating(rating)}
+                      aria-label={`${rating} star${rating > 1 ? "s" : ""}`}
+                      aria-pressed={reviewRating === rating}
+                    >
+                      ★
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="cd-form-group full-width">
+                <label htmlFor="review-comment">Review (optional)</label>
+                <textarea
+                  id="review-comment"
+                  rows="4"
+                  maxLength="500"
+                  placeholder="Share your experience with this service..."
+                  value={reviewComment}
+                  onChange={(e) => setReviewComment(e.target.value)}
+                />
+                <span className="cd-review-counter">{reviewComment.length}/500</span>
+              </div>
+              <div className="cd-form-group full-width">
+                <button
+                  type="submit"
+                  className="cd-btn-submit-booking"
+                  disabled={submittingReview || !reviewRating}
+                >
+                  {submittingReview ? "Submitting review..." : "Submit Review"}
                 </button>
               </div>
             </form>

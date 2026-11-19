@@ -17,7 +17,9 @@ function ProviderDashboard({ onNavigate }) {
     location: "Dhaka, Bangladesh",
     experienceYears: 3,
     isAvailable: true,
-    rating: 4.8,
+    rating: 0,
+    reviewCount: 0,
+    reviews: [],
     completedJobsCount: 0,
   });
 
@@ -356,7 +358,9 @@ function ProviderDashboard({ onNavigate }) {
             <div className="pd-stat-icon purple">⭐</div>
             <div className="pd-stat-info">
               <h4>Rating</h4>
-              <div className="pd-stat-value">{profile.rating} / 5.0</div>
+              <div className="pd-stat-value">
+                {profile.reviewCount ? `${profile.rating} / 5.0` : "No reviews"}
+              </div>
             </div>
           </div>
         </div>
@@ -432,6 +436,38 @@ function ProviderDashboard({ onNavigate }) {
                       </div>
                     ))}
                   </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === "overview" && (
+              <div className="pd-section-card">
+                <div className="pd-section-header">
+                  <h3>Customer Reviews ({profile.reviewCount || 0})</h3>
+                </div>
+                {profile.reviews?.length ? (
+                  <div className="pd-reviews-list">
+                    {profile.reviews.map((review, index) => (
+                      <article
+                        className="pd-review-item"
+                        key={`${review.createdAt}-${index}`}
+                      >
+                        <div className="pd-review-heading">
+                          <strong>{review.customerName}</strong>
+                          <span className="pd-review-stars">
+                            {"★".repeat(review.rating)}{" "}
+                            <span>{review.rating}/5</span>
+                          </span>
+                        </div>
+                        <div className="pd-review-service">{review.serviceTitle}</div>
+                        {review.comment && <p>{review.comment}</p>}
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="pd-review-empty">
+                    Completed jobs reviewed by customers will appear here.
+                  </p>
                 )}
               </div>
             )}

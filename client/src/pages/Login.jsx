@@ -53,7 +53,12 @@ function Login({ onNavigate }) {
         localStorage.setItem("slsf_user", JSON.stringify(data.user));
       }
 
-      const targetPath = data.user && data.user.role === "provider" ? "/provider-dashboard" : "/customer-dashboard";
+      let targetPath = "/customer-dashboard";
+      if (data.user?.role === "admin") {
+        targetPath = "/admin-dashboard";
+      } else if (data.user?.role === "provider") {
+        targetPath = "/provider-dashboard";
+      }
 
       setMessage({ type: "success", text: "Login successful! Redirecting..." });
 

@@ -395,6 +395,58 @@
   color: white;
 }
 
+.cd-btn-review {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cd-btn-review:hover {
+  background: #d97706;
+  color: white;
+}
+
+.cd-review-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #fbbf24;
+  font-size: 0.9rem;
+}
+
+.cd-review-summary span {
+  color: var(--cd-text-muted);
+}
+
+.cd-rating-picker {
+  display: flex;
+  gap: 8px;
+}
+
+.cd-rating-picker button {
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 2rem;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.cd-rating-picker button.selected,
+.cd-rating-picker button:hover {
+  color: #fbbf24;
+}
+
+.cd-review-counter {
+  align-self: flex-end;
+  color: var(--cd-text-muted);
+  font-size: 0.8rem;
+}
+
 /* Service Providers Grid (Find Service) */
 .cd-providers-grid {
   display: grid;

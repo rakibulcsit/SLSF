@@ -48,11 +48,21 @@ function Home({ onNavigate }) {
                 👤 {user.fullName} ({user.role})
               </span>
               <a
-                href={user.role === "provider" ? "/provider-dashboard" : "/customer-dashboard"}
+                href={
+                  user.role === "admin"
+                    ? "/admin-dashboard"
+                    : user.role === "provider"
+                    ? "/provider-dashboard"
+                    : "/customer-dashboard"
+                }
                 onClick={(e) =>
                   handleNav(
                     e,
-                    user.role === "provider" ? "/provider-dashboard" : "/customer-dashboard"
+                    user.role === "admin"
+                      ? "/admin-dashboard"
+                      : user.role === "provider"
+                      ? "/provider-dashboard"
+                      : "/customer-dashboard"
                   )
                 }
                 style={{
